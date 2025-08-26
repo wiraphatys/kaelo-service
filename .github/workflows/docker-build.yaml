@@ -45,20 +45,6 @@ jobs:
           type=semver,pattern={{major}}
           type=sha,prefix={{branch}}-
 
-    - name: Create .env file with secrets
-      run: |
-        cat > .env << EOF
-        FIREBASE_DB_URL=${{ secrets.FIREBASE_DB_URL }}
-        FIREBASE_SERVICE_ACCOUNT_JSON=${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
-        TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}
-        TELEGRAM_CHAT_ID=${{ secrets.TELEGRAM_CHAT_ID }}
-        TEMPERATURE_MIN=${{ secrets.TEMPERATURE_MIN }}
-        TEMPERATURE_MAX=${{ secrets.TEMPERATURE_MAX }}
-        HUMIDITY_MIN=${{ secrets.HUMIDITY_MIN }}
-        HUMIDITY_MAX=${{ secrets.HUMIDITY_MAX }}
-        DUST_MAX=${{ secrets.DUST_MAX }}
-        EOF
-
     - name: Build and push Docker image
       uses: docker/build-push-action@v5
       with:

@@ -6,7 +6,6 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-COPY .env .env
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o kaelo-service .
 
 # Production stage

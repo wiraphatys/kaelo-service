@@ -37,17 +37,6 @@ func LoadConfig() (*Config, error) {
 		DustMax:        getEnvFloat("DUST_MAX", 50.0),
 	}
 
-	// Echo all config
-	fmt.Println("FirebaseDbUrl:", config.FirebaseDbUrl)
-	fmt.Println("FirebaseServiceAccountJSON:", config.FirebaseServiceAccountJSON)
-	fmt.Println("TelegramBotToken:", config.TelegramBotToken)
-	fmt.Println("TelegramChatID:", config.TelegramChatID)
-	fmt.Println("TemperatureMin:", config.TemperatureMin)
-	fmt.Println("TemperatureMax:", config.TemperatureMax)
-	fmt.Println("HumidityMin:", config.HumidityMin)
-	fmt.Println("HumidityMax:", config.HumidityMax)
-	fmt.Println("DustMax:", config.DustMax)
-
 	return config, nil
 }
 

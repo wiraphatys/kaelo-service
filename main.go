@@ -55,6 +55,13 @@ func main() {
 
 	anomalyDetector := services.NewAnomalyDetector(cfg)
 
+	// Initialize hardware alert service
+	var hardwareAlertService *services.HardwareAlertService
+	if cfg.HardwareAlertURL != "" {
+		hardwareAlertService = services.NewHardwareAlertService(logger, cfg.HardwareAlertURL)
+		logger.Info("Hardware alert service initialized", zap.String("url", cfg.HardwareAlertURL))
+	}
+
 	// Send startup notification
 	if err := telegramService.SendStartupMessage(); err != nil {
 		logger.Warn("Failed to send startup message", zap.Error(err))
@@ -66,6 +73,10 @@ func main() {
 		zap.Float64("humidity_min", cfg.HumidityMin),
 		zap.Float64("humidity_max", cfg.HumidityMax),
 		zap.Float64("dust_max", cfg.DustMax),
+		zap.Float64("flame_threshold", cfg.FlameThreshold),
+		zap.Float64("light_min", cfg.LightMin),
+		zap.Float64("light_max", cfg.LightMax),
+		zap.Float64("gas_max", cfg.GasMax),
 	)
 
 	// Create context for graceful shutdown
@@ -110,6 +121,10 @@ func main() {
 				zap.Float64("temperature", sensorData.Temperature),
 				zap.Float64("humidity", sensorData.Humidity),
 				zap.Float64("dust", sensorData.Dust),
+				zap.Float64("flame", sensorData.Flame),
+				zap.Float64("light", sensorData.Light),
+				zap.Float64("vibration", sensorData.Vibration),
+				zap.Float64("gas", sensorData.Gas),
 			)
 
 			// Send Telegram notification
@@ -123,6 +138,21 @@ func main() {
 					zap.String("device_id", sensorData.DeviceID),
 					zap.Int("anomaly_count", len(anomalies)),
 				)
+			}
+
+			// Send hardware alert if service is configured
+			if hardwareAlertService != nil {
+				if err := hardwareAlertService.SendHardwareAlert(anomalies, sensorData); err != nil {
+					logger.Error("Failed to send hardware alert",
+						zap.String("device_id", sensorData.DeviceID),
+						zap.Error(err),
+					)
+				} else {
+					logger.Info("Hardware alert sent",
+						zap.String("device_id", sensorData.DeviceID),
+						zap.Int("anomaly_count", len(anomalies)),
+					)
+				}
 			}
 		}
 	})

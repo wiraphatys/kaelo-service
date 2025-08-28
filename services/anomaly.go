@@ -78,6 +78,65 @@ func (ad *AnomalyDetector) DetectAnomalies(data *models.SensorData) []*models.An
 		})
 	}
 
+	// Check flame sensor anomalies
+	if data.Flame > ad.config.FlameThreshold {
+		anomalies = append(anomalies, &models.Anomaly{
+			Type:        models.FlameDetected,
+			Value:       data.Flame,
+			Threshold:   ad.config.FlameThreshold,
+			DeviceID:    data.DeviceID,
+			Timestamp:   data.Timestamp,
+			Description: fmt.Sprintf("Flame detected! Sensor value: %.0f (threshold: %.0f)", data.Flame, ad.config.FlameThreshold),
+		})
+	}
+
+	// Check light sensor anomalies
+	if data.Light < ad.config.LightMin {
+		anomalies = append(anomalies, &models.Anomaly{
+			Type:        models.LightTooLow,
+			Value:       data.Light,
+			Threshold:   ad.config.LightMin,
+			DeviceID:    data.DeviceID,
+			Timestamp:   data.Timestamp,
+			Description: fmt.Sprintf("Light level %.0f is too low (minimum: %.0f)", data.Light, ad.config.LightMin),
+		})
+	}
+
+	if data.Light > ad.config.LightMax {
+		anomalies = append(anomalies, &models.Anomaly{
+			Type:        models.LightTooHigh,
+			Value:       data.Light,
+			Threshold:   ad.config.LightMax,
+			DeviceID:    data.DeviceID,
+			Timestamp:   data.Timestamp,
+			Description: fmt.Sprintf("Light level %.0f is too high (maximum: %.0f)", data.Light, ad.config.LightMax),
+		})
+	}
+
+	// Check vibration sensor anomalies
+	if data.Vibration > 0 {
+		anomalies = append(anomalies, &models.Anomaly{
+			Type:        models.VibrationDetected,
+			Value:       data.Vibration,
+			Threshold:   0,
+			DeviceID:    data.DeviceID,
+			Timestamp:   data.Timestamp,
+			Description: "Vibration detected! Device may be experiencing movement or impact",
+		})
+	}
+
+	// Check gas sensor anomalies
+	if data.Gas > ad.config.GasMax {
+		anomalies = append(anomalies, &models.Anomaly{
+			Type:        models.GasTooHigh,
+			Value:       data.Gas,
+			Threshold:   ad.config.GasMax,
+			DeviceID:    data.DeviceID,
+			Timestamp:   data.Timestamp,
+			Description: fmt.Sprintf("Dangerous gas level detected! %.0f PPM (threshold: %.0f PPM)", data.Gas, ad.config.GasMax),
+		})
+	}
+
 	return anomalies
 }
 

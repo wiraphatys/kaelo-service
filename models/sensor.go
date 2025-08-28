@@ -10,6 +10,10 @@ type SensorData struct {
 	Temperature float64   `json:"temperature"`
 	Humidity    float64   `json:"humidity"`
 	Dust        float64   `json:"dust"`
+	Flame       float64   `json:"flame"`     // KY-026 Flame sensor (0-1023)
+	Light       float64   `json:"light"`     // KY-018 Photo resistor (0-1023)
+	Vibration   float64   `json:"vibration"` // KY-002 Vibration switch (0/1)
+	Gas         float64   `json:"gas"`       // MQ135 Gas sensor (0-1023 PPM)
 	Timestamp   time.Time `json:"timestamp"`
 }
 
@@ -22,6 +26,11 @@ const (
 	HumidityTooHigh    AnomalyType = "humidity_high"
 	HumidityTooLow     AnomalyType = "humidity_low"
 	DustTooHigh        AnomalyType = "dust_high"
+	FlameDetected      AnomalyType = "flame_detected"
+	LightTooLow        AnomalyType = "light_low"
+	LightTooHigh       AnomalyType = "light_high"
+	VibrationDetected  AnomalyType = "vibration_detected"
+	GasTooHigh         AnomalyType = "gas_high"
 )
 
 // Anomaly represents a detected anomaly
@@ -47,6 +56,16 @@ func (a *Anomaly) GetAnomalyEmoji() string {
 		return "🏜️"
 	case DustTooHigh:
 		return "💨"
+	case FlameDetected:
+		return "🚨"
+	case LightTooLow:
+		return "🌑"
+	case LightTooHigh:
+		return "☀️"
+	case VibrationDetected:
+		return "📳"
+	case GasTooHigh:
+		return "☠️"
 	default:
 		return "⚠️"
 	}
@@ -56,12 +75,12 @@ func (a *Anomaly) GetAnomalyEmoji() string {
 func (a *Anomaly) GetSeverityColor() string {
 	// Return HTML color codes for Telegram
 	switch a.Type {
-	case TemperatureTooHigh, DustTooHigh:
+	case TemperatureTooHigh, DustTooHigh, FlameDetected, GasTooHigh:
 		return "🔴" // Red for high severity
-	case TemperatureTooLow, HumidityTooLow:
+	case TemperatureTooLow, HumidityTooLow, VibrationDetected:
 		return "🟡" // Yellow for medium severity
-	case HumidityTooHigh:
-		return "🔵" // Blue for humidity issues
+	case HumidityTooHigh, LightTooLow, LightTooHigh:
+		return "🔵" // Blue for environmental issues
 	default:
 		return "⚪" // White for unknown
 	}

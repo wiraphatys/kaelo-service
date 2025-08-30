@@ -1,0 +1,8 @@
+services:
+  kaelo-service:
+    image: ghcr.io/wiraphatys/kaelo-service:main-5ccd657
+    container_name: kaelo-service
+    ports:
+      - 8080:8080
+    env_file:
+      - ./.env

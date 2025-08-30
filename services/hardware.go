@@ -112,16 +112,26 @@ func (h *HardwareAlertService) SendHardwareAlert(anomalies []*models.Anomaly, se
 
 // determineSeverity determines alert severity based on anomaly types
 func (h *HardwareAlertService) determineSeverity(anomalies []*models.Anomaly) string {
+	// Check if this is a critical anomaly that needs hardware alert
+	for _, anomaly := range anomalies {
+		switch anomaly.Type {
+		case models.FlameDetected, models.GasQualityPoor:
+			return "critical"
+		case models.AccelerationAbnormal:
+			return "high"
+		case models.GyroscopeAbnormal:
+			return "high"
+		}
+	}
+
 	hasHighSeverity := false
 	hasMediumSeverity := false
 
 	for _, anomaly := range anomalies {
 		switch anomaly.Type {
-		case models.FlameDetected, models.GasTooHigh:
-			return "critical" // Immediate return for critical alerts
-		case models.TemperatureTooHigh, models.DustTooHigh:
+		case models.TemperatureTooHigh, models.GasQualityModerate:
 			hasHighSeverity = true
-		case models.VibrationDetected, models.TemperatureTooLow, models.HumidityTooLow:
+		case models.TemperatureTooLow, models.HumidityTooLow, models.TemperatureDifferential:
 			hasMediumSeverity = true
 		}
 	}

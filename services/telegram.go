@@ -6,9 +6,10 @@ import (
 	"strings"
 	"time"
 
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"kaelo/config"
 	"kaelo/models"
+
+	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"go.uber.org/zap"
 )
 
@@ -54,28 +55,28 @@ func NewTelegramService(cfg *config.Config) (*TelegramService, error) {
 // testConnection tests Telegram connection with retry logic
 func (ts *TelegramService) testConnection() error {
 	maxRetries := 3
-	
+
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		ts.logger.Info("Testing Telegram connection", zap.Int("attempt", attempt), zap.Int("max_retries", maxRetries))
-		
+
 		// Try to get bot info to test connection
 		_, err := ts.bot.GetMe()
-		
+
 		if err == nil {
 			ts.logger.Info("Telegram connection successful")
 			return nil
 		}
-		
+
 		ts.logger.Warn("Telegram connection failed",
 			zap.Int("attempt", attempt),
 			zap.Int("max_retries", maxRetries),
 			zap.Error(err))
-		
+
 		if attempt < maxRetries {
 			time.Sleep(time.Duration(attempt) * time.Second) // Exponential backoff
 		}
 	}
-	
+
 	return fmt.Errorf("failed to connect to Telegram after %d attempts", maxRetries)
 }
 
@@ -117,7 +118,7 @@ func (ts *TelegramService) shouldThrottleAlert(deviceID string) bool {
 	if !exists {
 		return false // No previous alert, don't throttle
 	}
-	
+
 	timeSinceLastAlert := time.Since(lastAlertTime)
 	return timeSinceLastAlert < 15*time.Second
 }
@@ -135,20 +136,24 @@ func (ts *TelegramService) formatAnomalyMessage(anomalies []*models.Anomaly, sen
 
 	// Current readings section
 	sb.WriteString("📊 <b>Current Readings:</b>\n")
-	sb.WriteString(fmt.Sprintf("🌡️ Temperature: %.1f°C\n", sensorData.Temperature))
+	sb.WriteString(fmt.Sprintf("🌡️ DHT Temperature: %.1f°C\n", sensorData.TemperatureDHT))
 	sb.WriteString(fmt.Sprintf("💧 Humidity: %.1f%%\n", sensorData.Humidity))
-	sb.WriteString(fmt.Sprintf("💨 Dust: %.1f μg/m³\n\n", sensorData.Dust))
+	sb.WriteString(fmt.Sprintf("💨 Gas Quality: %s\n", sensorData.GasQuality))
+	sb.WriteString(fmt.Sprintf("🔥 Flame: %t\n\n", sensorData.FlameDetected))
+
+	// deprecated
+	// sb.WriteString(fmt.Sprintf("🌡️ MPU Temperature: %.1f°C\n", sensorData.TemperatureMPU))
 
 	// Anomalies section
 	sb.WriteString("⚠️ <b>Detected Issues:</b>\n")
 	for i, anomaly := range anomalies {
-		sb.WriteString(fmt.Sprintf("%s %s <b>%s</b>\n", 
-			anomaly.GetSeverityColor(), 
-			anomaly.GetAnomalyEmoji(), 
+		sb.WriteString(fmt.Sprintf("%s %s <b>%s</b>\n",
+			anomaly.GetSeverityColor(),
+			anomaly.GetAnomalyEmoji(),
 			ts.getAnomalyTitle(anomaly)))
-		
+
 		sb.WriteString(fmt.Sprintf("   └ %s\n", anomaly.Description))
-		
+
 		if i < len(anomalies)-1 {
 			sb.WriteString("\n")
 		}
@@ -157,7 +162,7 @@ func (ts *TelegramService) formatAnomalyMessage(anomalies []*models.Anomaly, sen
 	// Footer with action recommendation
 	sb.WriteString("\n💡 <b>Recommended Action:</b>\n")
 	sb.WriteString("Please check the environment and take appropriate measures to normalize the conditions.\n\n")
-	
+
 	// Status indicator
 	sb.WriteString("🔴 <b>Status:</b> ATTENTION REQUIRED")
 
@@ -175,8 +180,18 @@ func (ts *TelegramService) getAnomalyTitle(anomaly *models.Anomaly) string {
 		return "High Humidity Alert"
 	case models.HumidityTooLow:
 		return "Low Humidity Alert"
-	case models.DustTooHigh:
-		return "High Dust Level Alert"
+	case models.GasQualityPoor:
+		return "Poor Air Quality Alert"
+	case models.GasQualityModerate:
+		return "Moderate Air Quality Alert"
+	case models.FlameDetected:
+		return "Flame Detection Alert"
+	case models.AccelerationAbnormal:
+		return "Abnormal Movement Alert"
+	case models.GyroscopeAbnormal:
+		return "Abnormal Rotation Alert"
+	case models.TemperatureDifferential:
+		return "Temperature Sensor Mismatch"
 	default:
 		return "Sensor Alert"
 	}
@@ -186,7 +201,7 @@ func (ts *TelegramService) getAnomalyTitle(anomaly *models.Anomaly) string {
 func (ts *TelegramService) SendStatusMessage(message string) error {
 	msg := tgbotapi.NewMessage(ts.chatID, message)
 	msg.ParseMode = "HTML"
-	
+
 	_, err := ts.bot.Send(msg)
 	return err
 }

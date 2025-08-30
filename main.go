@@ -53,7 +53,7 @@ func main() {
 		logger.Fatal("Failed to initialize Telegram service", zap.Error(err))
 	}
 
-	anomalyDetector := services.NewAnomalyDetector(cfg)
+	anomalyDetector := services.NewAnomalyDetectionService(cfg)
 
 	// Initialize hardware alert service
 	var hardwareAlertService *services.HardwareAlertService
@@ -118,13 +118,13 @@ func main() {
 			logger.Warn("Anomalies detected",
 				zap.String("device_id", sensorData.DeviceID),
 				zap.Int("anomaly_count", len(anomalies)),
-				zap.Float64("temperature", sensorData.Temperature),
+				zap.Float64("temperature_dht", sensorData.TemperatureDHT),
+				zap.Float64("temperature_mpu", sensorData.TemperatureMPU),
 				zap.Float64("humidity", sensorData.Humidity),
-				zap.Float64("dust", sensorData.Dust),
-				zap.Float64("flame", sensorData.Flame),
-				zap.Float64("light", sensorData.Light),
-				zap.Float64("vibration", sensorData.Vibration),
-				zap.Float64("gas", sensorData.Gas),
+				zap.String("gas_quality", sensorData.GasQuality),
+				zap.Bool("flame_detected", sensorData.FlameDetected),
+				zap.Any("acceleration", sensorData.Acceleration),
+				zap.Any("gyroscope", sensorData.Gyroscope),
 			)
 
 			// Send Telegram notification

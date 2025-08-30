@@ -10,8 +10,8 @@ import (
 
 	firebase "firebase.google.com/go/v4"
 	"firebase.google.com/go/v4/db"
-	"google.golang.org/api/option"
 	"go.uber.org/zap"
+	"google.golang.org/api/option"
 )
 
 type FirebaseService struct {
@@ -77,9 +77,9 @@ func (fs *FirebaseService) testConnection() error {
 			return nil
 		}
 
-		fs.logger.Warn("Firebase connection failed", 
-			zap.Int("attempt", attempt), 
-			zap.Int("max_retries", maxRetries), 
+		fs.logger.Warn("Firebase connection failed",
+			zap.Int("attempt", attempt),
+			zap.Int("max_retries", maxRetries),
 			zap.Error(err))
 
 		if attempt < maxRetries {
@@ -153,9 +153,11 @@ func (fs *FirebaseService) SubscribeToSensorData(ctx context.Context, callback f
 								fs.logger.Debug("New sensor data received",
 									zap.String("record_id", randomID),
 									zap.String("device_id", sensorData.DeviceID),
-									zap.Float64("temperature", sensorData.Temperature),
+									zap.Float64("temperature_dht", sensorData.TemperatureDHT),
+									zap.Float64("temperature_mpu", sensorData.TemperatureMPU),
 									zap.Float64("humidity", sensorData.Humidity),
-									zap.Float64("dust", sensorData.Dust),
+									zap.String("gas_quality", sensorData.GasQuality),
+									zap.Bool("flame_detected", sensorData.FlameDetected),
 								)
 							}
 						}
@@ -195,31 +197,43 @@ func (fs *FirebaseService) SubscribeToSensorData(ctx context.Context, callback f
 func (fs *FirebaseService) parseSensorData(randomID string, data map[string]interface{}) *models.SensorData {
 	// Extract device_id from the nested data
 	deviceID, deviceOk := data["device_id"].(string)
-	temperature, tempOk := data["temperature"].(float64)
+	temperatureDHT, tempDHTOk := data["temperature_dht"].(float64)
+	temperatureMPU, tempMPUOk := data["temperature_mpu"].(float64)
 	humidity, humOk := data["humidity"].(float64)
-	dust, dustOk := data["dust"].(float64)
+	gasQuality, gasOk := data["gas_quality"].(string)
+	flameDetected, flameOk := data["flame_detected"].(bool)
 	timestampStr, timeOk := data["timestamp"].(string)
 
-	if !deviceOk || !tempOk || !humOk || !dustOk || !timeOk {
+	if !deviceOk || !tempDHTOk || !humOk || !gasOk || !timeOk {
 		fs.logger.Warn("Invalid sensor data format", zap.String("record_id", randomID))
 		return nil
+	}
+
+	// Set defaults for optional fields
+	if !tempMPUOk {
+		temperatureMPU = 0
+	}
+	if !flameOk {
+		flameDetected = false
 	}
 
 	// Parse timestamp
 	timestamp, err := time.Parse(time.RFC3339, timestampStr)
 	if err != nil {
-		fs.logger.Warn("Invalid timestamp format", 
-			zap.String("record_id", randomID), 
+		fs.logger.Warn("Invalid timestamp format",
+			zap.String("record_id", randomID),
 			zap.Error(err))
 		return nil
 	}
 
 	return &models.SensorData{
-		DeviceID:    deviceID,
-		Temperature: temperature,
-		Humidity:    humidity,
-		Dust:        dust,
-		Timestamp:   timestamp,
+		DeviceID:       deviceID,
+		TemperatureDHT: temperatureDHT,
+		TemperatureMPU: temperatureMPU,
+		Humidity:       humidity,
+		GasQuality:     gasQuality,
+		FlameDetected:  flameDetected,
+		Timestamp:      timestamp,
 	}
 }
 

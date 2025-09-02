@@ -18,6 +18,7 @@ type TelegramService struct {
 	chatID         int64
 	config         *config.Config
 	lastAlertTimes map[string]time.Time // Track last alert time per device
+	lastFlameAlertTimes map[string]time.Time // Track last flame alert time per device
 	logger         *zap.Logger
 }
 
@@ -40,6 +41,7 @@ func NewTelegramService(cfg *config.Config) (*TelegramService, error) {
 		chatID:         chatID,
 		config:         cfg,
 		lastAlertTimes: make(map[string]time.Time),
+		lastFlameAlertTimes: make(map[string]time.Time),
 		logger:         logger,
 	}
 
@@ -86,10 +88,21 @@ func (ts *TelegramService) SendAnomalyAlert(anomalies []*models.Anomaly, sensorD
 		return nil
 	}
 
-	// Check if we should throttle notifications for this device
-	if ts.shouldThrottleAlert(sensorData.DeviceID) {
-		ts.logger.Debug("Throttling alert", zap.String("device_id", sensorData.DeviceID))
-		return nil
+	// Check for flame detection - special case handling
+	hasFlameDetection := ts.hasFlameDetection(anomalies)
+	
+	if hasFlameDetection {
+		// For flame detection: check flame-specific throttling
+		if ts.shouldThrottleFlameAlert(sensorData.DeviceID) {
+			ts.logger.Debug("Throttling flame alert", zap.String("device_id", sensorData.DeviceID))
+			return nil
+		}
+	} else {
+		// For non-flame anomalies: use regular throttling
+		if ts.shouldThrottleAlert(sensorData.DeviceID) {
+			ts.logger.Debug("Throttling alert", zap.String("device_id", sensorData.DeviceID))
+			return nil
+		}
 	}
 
 	message := ts.formatAnomalyMessage(anomalies, sensorData)
@@ -104,7 +117,11 @@ func (ts *TelegramService) SendAnomalyAlert(anomalies []*models.Anomaly, sensorD
 	}
 
 	// Update last alert time for this device
-	ts.lastAlertTimes[sensorData.DeviceID] = time.Now()
+	if hasFlameDetection {
+		ts.lastFlameAlertTimes[sensorData.DeviceID] = time.Now()
+	} else {
+		ts.lastAlertTimes[sensorData.DeviceID] = time.Now()
+	}
 
 	ts.logger.Info("Sent anomaly alert",
 		zap.String("device_id", sensorData.DeviceID),
@@ -121,6 +138,27 @@ func (ts *TelegramService) shouldThrottleAlert(deviceID string) bool {
 
 	timeSinceLastAlert := time.Since(lastAlertTime)
 	return timeSinceLastAlert < 15*time.Second
+}
+
+// shouldThrottleFlameAlert checks if we should throttle flame alerts for a device (within 15 seconds)
+func (ts *TelegramService) shouldThrottleFlameAlert(deviceID string) bool {
+	lastFlameAlertTime, exists := ts.lastFlameAlertTimes[deviceID]
+	if !exists {
+		return false // No previous flame alert, don't throttle
+	}
+
+	timeSinceLastFlameAlert := time.Since(lastFlameAlertTime)
+	return timeSinceLastFlameAlert < 15*time.Second
+}
+
+// hasFlameDetection checks if any of the anomalies contains flame detection
+func (ts *TelegramService) hasFlameDetection(anomalies []*models.Anomaly) bool {
+	for _, anomaly := range anomalies {
+		if anomaly.Type == models.FlameDetected {
+			return true
+		}
+	}
+	return false
 }
 
 // formatAnomalyMessage creates a mobile-friendly, beautifully formatted message

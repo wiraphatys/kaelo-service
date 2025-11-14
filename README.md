@@ -52,7 +52,7 @@ cp .env.example .env
 - Create a bot via [@BotFather](https://t.me/botfather)
 - Get your chat ID (you can use [@userinfobot](https://t.me/userinfobot))
 
-### Environment Variables
+
 
 | Variable | Description | Default |
 |----------|-------------|---------|
@@ -221,3 +221,4 @@ For issues and questions, please create an issue in the GitHub repository.
 ## 📄 License
 
 This project is licensed under the MIT License.
+

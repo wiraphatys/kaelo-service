@@ -34,6 +34,9 @@ func main() {
 	}
 
 	// Validate required configuration
+	if cfg.RabbitMQURL == "" {
+		logger.Fatal("RabbitMQ configuration is required")
+	}
 	if cfg.FirebaseDbUrl == "" || cfg.FirebaseServiceAccountJSON == "" {
 		logger.Fatal("Firebase configuration is required")
 	}
@@ -62,12 +65,26 @@ func main() {
 		logger.Info("Hardware alert service initialized", zap.String("url", cfg.HardwareAlertURL))
 	}
 
+	// Initialize RabbitMQ service
+	rabbitMQService, err := services.NewRabbitMQService(cfg, logger)
+	if err != nil {
+		logger.Fatal("Failed to initialize RabbitMQ service", zap.Error(err))
+	}
+	defer rabbitMQService.Close()
+
+	// Initialize batch writer service
+	batchWriterService := services.NewBatchWriterService(cfg, firebaseService, logger)
+
 	// Send startup notification
 	if err := telegramService.SendStartupMessage(); err != nil {
 		logger.Warn("Failed to send startup message", zap.Error(err))
 	}
 
 	logger.Info("KAELO IoT Monitoring Service started",
+		zap.String("rabbitmq_url", cfg.RabbitMQURL),
+		zap.String("rabbitmq_queue", cfg.RabbitMQQueue),
+		zap.Int("firebase_batch_size", cfg.FirebaseBatchSize),
+		zap.Int("firebase_batch_timeout", cfg.FirebaseBatchTimeout),
 		zap.Float64("temp_min", cfg.TemperatureMin),
 		zap.Float64("temp_max", cfg.TemperatureMax),
 		zap.Float64("humidity_min", cfg.HumidityMin),
@@ -101,7 +118,7 @@ func main() {
 		select {
 		case <-cleanupDone:
 			logger.Info("Cleanup completed successfully")
-		case <-time.After(5 * time.Second):
+		case <-time.After(10 * time.Second):
 			logger.Warn("Cleanup timeout, forcing exit")
 		}
 
@@ -109,65 +126,148 @@ func main() {
 		os.Exit(0)
 	}()
 
-	// Subscribe to Firebase sensor data
-	err = firebaseService.SubscribeToSensorData(ctx, func(sensorData *models.SensorData) {
-		// Detect anomalies
-		anomalies := anomalyDetector.DetectAnomalies(sensorData)
+	// Create channels for sensor data processing
+	// Buffer size should be large enough to handle burst traffic
+	businessLogicChan := make(chan *models.SensorData, 200)
+	batchWriterChan := make(chan *models.SensorData, 200)
 
-		if len(anomalies) > 0 {
-			logger.Warn("Anomalies detected",
-				zap.String("device_id", sensorData.DeviceID),
-				zap.Int("anomaly_count", len(anomalies)),
-				zap.Float64("temperature_dht", sensorData.TemperatureDHT),
-				zap.Float64("temperature_mpu", sensorData.TemperatureMPU),
-				zap.Float64("humidity", sensorData.Humidity),
-				zap.String("gas_quality", sensorData.GasQuality),
-				zap.Bool("flame_detected", sensorData.FlameDetected),
-				zap.Any("acceleration", sensorData.Acceleration),
-				zap.Any("gyroscope", sensorData.Gyroscope),
-			)
+	// Start Process 1: Business Logic Processing (Anomaly Detection + Alerts)
+	go func() {
+		logger.Info("Starting business logic processor")
+		for {
+			select {
+			case <-ctx.Done():
+				logger.Info("Business logic processor stopped")
+				return
+			case sensorData, ok := <-businessLogicChan:
+				if !ok {
+					logger.Info("Business logic channel closed")
+					return
+				}
 
-			// Send Telegram notification
-			if err := telegramService.SendAnomalyAlert(anomalies, sensorData); err != nil {
-				logger.Error("Failed to send Telegram alert",
-					zap.String("device_id", sensorData.DeviceID),
-					zap.Error(err),
-				)
-			} else {
-				logger.Info("Anomaly alert sent",
-					zap.String("device_id", sensorData.DeviceID),
-					zap.Int("anomaly_count", len(anomalies)),
-				)
-			}
+				// Detect anomalies
+				anomalies := anomalyDetector.DetectAnomalies(sensorData)
 
-			// Send hardware alert if service is configured
-			if hardwareAlertService != nil {
-				if err := hardwareAlertService.SendHardwareAlert(anomalies, sensorData); err != nil {
-					logger.Error("Failed to send hardware alert",
-						zap.String("device_id", sensorData.DeviceID),
-						zap.Error(err),
-					)
-				} else {
-					logger.Info("Hardware alert sent",
+				if len(anomalies) > 0 {
+					logger.Warn("Anomalies detected",
 						zap.String("device_id", sensorData.DeviceID),
 						zap.Int("anomaly_count", len(anomalies)),
+						zap.Float64("temperature_dht", sensorData.TemperatureDHT),
+						zap.Float64("temperature_mpu", sensorData.TemperatureMPU),
+						zap.Float64("humidity", sensorData.Humidity),
+						zap.String("gas_quality", sensorData.GasQuality),
+						zap.Bool("flame_detected", sensorData.FlameDetected),
+						zap.Any("acceleration", sensorData.Acceleration),
+						zap.Any("gyroscope", sensorData.Gyroscope),
 					)
+
+					// Send Telegram notification
+					if err := telegramService.SendAnomalyAlert(anomalies, sensorData); err != nil {
+						logger.Error("Failed to send Telegram alert",
+							zap.String("device_id", sensorData.DeviceID),
+							zap.Error(err),
+						)
+					} else {
+						logger.Info("Anomaly alert sent",
+							zap.String("device_id", sensorData.DeviceID),
+							zap.Int("anomaly_count", len(anomalies)),
+						)
+					}
+
+					// Send hardware alert if service is configured
+					if hardwareAlertService != nil {
+						if err := hardwareAlertService.SendHardwareAlert(anomalies, sensorData); err != nil {
+							logger.Error("Failed to send hardware alert",
+								zap.String("device_id", sensorData.DeviceID),
+								zap.Error(err),
+							)
+						} else {
+							logger.Info("Hardware alert sent",
+								zap.String("device_id", sensorData.DeviceID),
+								zap.Int("anomaly_count", len(anomalies)),
+							)
+						}
+					}
 				}
 			}
 		}
-	})
+	}()
 
-	if err != nil {
-		logger.Fatal("Failed to subscribe to sensor data", zap.Error(err))
-	}
+	// Start Process 2: Batch Writer for Firebase
+	go batchWriterService.Start(ctx, batchWriterChan)
 
-	logger.Info("Monitoring started, waiting for sensor data")
+	// Start RabbitMQ consumer and distribute messages to both processes
+	go func() {
+		logger.Info("Starting RabbitMQ consumer and message distributor")
+
+		// Create a single channel for RabbitMQ messages
+		rabbitMQChan := make(chan *models.SensorData, 100)
+
+		// Start RabbitMQ consumer
+		go func() {
+			if err := rabbitMQService.Consume(ctx, rabbitMQChan); err != nil {
+				logger.Error("RabbitMQ consumer error", zap.Error(err))
+			}
+		}()
+
+		// Distribute messages to both processing channels
+		for {
+			select {
+			case <-ctx.Done():
+				logger.Info("Message distributor stopped")
+				close(businessLogicChan)
+				close(batchWriterChan)
+				return
+			case sensorData, ok := <-rabbitMQChan:
+				if !ok {
+					logger.Info("RabbitMQ channel closed")
+					close(businessLogicChan)
+					close(batchWriterChan)
+					return
+				}
+
+				// Send to both processes (non-blocking with timeout)
+				// Process 1: Business Logic
+				select {
+				case businessLogicChan <- sensorData:
+				case <-time.After(1 * time.Second):
+					logger.Warn("Timeout sending to business logic channel",
+						zap.String("device_id", sensorData.DeviceID))
+				}
+
+				// Process 2: Batch Writer
+				select {
+				case batchWriterChan <- sensorData:
+				case <-time.After(1 * time.Second):
+					logger.Warn("Timeout sending to batch writer channel",
+						zap.String("device_id", sensorData.DeviceID))
+				}
+			}
+		}
+	}()
+
+	logger.Info("All services started, waiting for messages from RabbitMQ")
 
 	// Wait for shutdown signal
 	<-ctx.Done()
 
 	// Perform cleanup
 	logger.Info("Starting cleanup")
+
+	// Wait for batch writer to finish flushing
+	logger.Info("Waiting for batch writer to flush remaining data")
+	if batchWriterService.WaitForShutdown(5 * time.Second) {
+		logger.Info("Batch writer shutdown completed")
+	} else {
+		logger.Warn("Batch writer shutdown timeout")
+	}
+
+	// Close RabbitMQ service
+	if err := rabbitMQService.Close(); err != nil {
+		logger.Error("Error closing RabbitMQ service", zap.Error(err))
+	} else {
+		logger.Info("RabbitMQ service closed")
+	}
 
 	// Close Firebase service
 	if err := firebaseService.Close(); err != nil {

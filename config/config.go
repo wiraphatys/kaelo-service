@@ -8,11 +8,24 @@ import (
 )
 
 type Config struct {
+	// RabbitMQ Configuration
+	RabbitMQURL      string
+	RabbitMQQueue    string
+	RabbitMQExchange string
+
+	// Firebase Configuration
 	FirebaseDbUrl              string
 	FirebaseServiceAccountJSON string
-	TelegramBotToken           string
-	TelegramChatID             string
-	HardwareAlertURL           string
+	FirebaseBatchSize          int
+	FirebaseBatchTimeout       int // in seconds
+
+	// Telegram Configuration
+	TelegramBotToken string
+	TelegramChatID   string
+
+	// Hardware Alert Configuration
+	HardwareAlertURL string
+
 	// Thresholds for anomaly detection
 	TemperatureMin float64
 	TemperatureMax float64
@@ -30,11 +43,24 @@ func LoadConfig() (*Config, error) {
 	_ = godotenv.Load()
 
 	config := &Config{
+		// RabbitMQ Configuration
+		RabbitMQURL:      getEnv("RABBITMQ_URL", "amqp://kaelo:kaelo2024@localhost:5672/"),
+		RabbitMQQueue:    getEnv("RABBITMQ_QUEUE", "sensor_data_queue"),
+		RabbitMQExchange: getEnv("RABBITMQ_EXCHANGE", "sensors"),
+
+		// Firebase Configuration
 		FirebaseDbUrl:              getEnv("FIREBASE_DB_URL", ""),
 		FirebaseServiceAccountJSON: getEnv("FIREBASE_SERVICE_ACCOUNT_JSON", ""),
-		TelegramBotToken:           getEnv("TELEGRAM_BOT_TOKEN", ""),
-		TelegramChatID:             getEnv("TELEGRAM_CHAT_ID", ""),
-		HardwareAlertURL:           getEnv("HARDWARE_ALERT_URL", ""),
+		FirebaseBatchSize:          getEnvInt("FIREBASE_BATCH_SIZE", 100),
+		FirebaseBatchTimeout:       getEnvInt("FIREBASE_BATCH_TIMEOUT", 10),
+
+		// Telegram Configuration
+		TelegramBotToken: getEnv("TELEGRAM_BOT_TOKEN", ""),
+		TelegramChatID:   getEnv("TELEGRAM_CHAT_ID", ""),
+
+		// Hardware Alert Configuration
+		HardwareAlertURL: getEnv("HARDWARE_ALERT_URL", ""),
+
 		// Default thresholds - can be overridden by env vars
 		TemperatureMin: getEnvFloat("TEMPERATURE_MIN", 15.0),
 		TemperatureMax: getEnvFloat("TEMPERATURE_MAX", 35.0),
@@ -72,4 +98,21 @@ func parseFloat(s string) (float64, error) {
 	var f float64
 	_, err := fmt.Sscanf(s, "%f", &f)
 	return f, err
+}
+
+func getEnvInt(key string, defaultValue int) int {
+	if value := os.Getenv(key); value != "" {
+		// Simple conversion - in production you might want better error handling
+		if i, err := parseInt(value); err == nil {
+			return i
+		}
+	}
+	return defaultValue
+}
+
+func parseInt(s string) (int, error) {
+	// Simple int parsing
+	var i int
+	_, err := fmt.Sscanf(s, "%d", &i)
+	return i, err
 }

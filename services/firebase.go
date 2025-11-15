@@ -273,6 +273,73 @@ func (fs *FirebaseService) GetLatestSensorData(ctx context.Context, deviceID str
 	return latestData, nil
 }
 
+// WriteBatch writes a batch of sensor data to Firebase
+func (fs *FirebaseService) WriteBatch(ctx context.Context, batch []*models.SensorData) error {
+	if len(batch) == 0 {
+		return nil
+	}
+
+	fs.logger.Info("Writing batch to Firebase",
+		zap.Int("batch_size", len(batch)))
+
+	ref := fs.client.NewRef("sensor-data")
+
+	// Use multi-path update for better performance
+	updates := make(map[string]interface{})
+
+	for _, data := range batch {
+		// Generate a unique key for each record (using timestamp + device ID)
+		key := fmt.Sprintf("%d-%s", data.Timestamp.UnixNano(), data.DeviceID)
+
+		// Convert struct to map
+		dataMap := map[string]interface{}{
+			"device_id":       data.DeviceID,
+			"temperature_dht": data.TemperatureDHT,
+			"temperature_mpu": data.TemperatureMPU,
+			"humidity":        data.Humidity,
+			"gas_quality":     data.GasQuality,
+			"flame_detected":  data.FlameDetected,
+			"timestamp":       data.Timestamp.Format(time.RFC3339),
+		}
+
+		// Add acceleration data if present
+		if data.Acceleration.X != 0 || data.Acceleration.Y != 0 || data.Acceleration.Z != 0 {
+			dataMap["acceleration"] = map[string]interface{}{
+				"x": data.Acceleration.X,
+				"y": data.Acceleration.Y,
+				"z": data.Acceleration.Z,
+			}
+		}
+
+		// Add gyroscope data if present
+		if data.Gyroscope.X != 0 || data.Gyroscope.Y != 0 || data.Gyroscope.Z != 0 {
+			dataMap["gyroscope"] = map[string]interface{}{
+				"x": data.Gyroscope.X,
+				"y": data.Gyroscope.Y,
+				"z": data.Gyroscope.Z,
+			}
+		}
+
+		updates[key] = dataMap
+	}
+
+	// Perform batch update with timeout
+	writeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	if err := ref.Update(writeCtx, updates); err != nil {
+		fs.logger.Error("Failed to write batch to Firebase",
+			zap.Int("batch_size", len(batch)),
+			zap.Error(err))
+		return fmt.Errorf("failed to write batch: %w", err)
+	}
+
+	fs.logger.Info("Successfully wrote batch to Firebase",
+		zap.Int("batch_size", len(batch)))
+
+	return nil
+}
+
 // Close closes the Firebase connection
 func (fs *FirebaseService) Close() error {
 	fs.logger.Info("Closing Firebase service")

@@ -1,6 +1,7 @@
 package services
 
 import (
+	"encoding/base64"
 	"fmt"
 	"strconv"
 	"strings"
@@ -14,12 +15,12 @@ import (
 )
 
 type TelegramService struct {
-	bot            *tgbotapi.BotAPI
-	chatID         int64
-	config         *config.Config
-	lastAlertTimes map[string]time.Time // Track last alert time per device
+	bot                 *tgbotapi.BotAPI
+	chatID              int64
+	config              *config.Config
+	lastAlertTimes      map[string]time.Time // Track last alert time per device
 	lastFlameAlertTimes map[string]time.Time // Track last flame alert time per device
-	logger         *zap.Logger
+	logger              *zap.Logger
 }
 
 func NewTelegramService(cfg *config.Config) (*TelegramService, error) {
@@ -37,12 +38,12 @@ func NewTelegramService(cfg *config.Config) (*TelegramService, error) {
 	logger.Info("Telegram bot authorized", zap.String("username", bot.Self.UserName))
 
 	ts := &TelegramService{
-		bot:            bot,
-		chatID:         chatID,
-		config:         cfg,
-		lastAlertTimes: make(map[string]time.Time),
+		bot:                 bot,
+		chatID:              chatID,
+		config:              cfg,
+		lastAlertTimes:      make(map[string]time.Time),
 		lastFlameAlertTimes: make(map[string]time.Time),
-		logger:         logger,
+		logger:              logger,
 	}
 
 	// Test Telegram connection with retry
@@ -90,7 +91,7 @@ func (ts *TelegramService) SendAnomalyAlert(anomalies []*models.Anomaly, sensorD
 
 	// Check for flame detection - special case handling
 	hasFlameDetection := ts.hasFlameDetection(anomalies)
-	
+
 	if hasFlameDetection {
 		// For flame detection: check flame-specific throttling
 		if ts.shouldThrottleFlameAlert(sensorData.DeviceID) {
@@ -253,4 +254,110 @@ func (ts *TelegramService) SendStartupMessage() error {
 		"✅ System is ready and operational!"
 
 	return ts.SendStatusMessage(message)
+}
+
+// SendUnknownPersonAlert sends alert when unknown person is detected with photo
+func (ts *TelegramService) SendUnknownPersonAlert(uid string, imageBase64 string, timestamp string) error {
+	// Format message
+	message := fmt.Sprintf(
+		"🚨 <b>UNKNOWN PERSON DETECTED</b> 🚨\n\n"+
+			"👤 <b>Person ID:</b> <code>%s</code>\n"+
+			"🕐 <b>Time:</b> %s\n\n"+
+			"⚠️ An unrecognized person has entered the premises.\n"+
+			"Please check the attached photo and take appropriate action.",
+		uid,
+		timestamp,
+	)
+
+	// If photo is provided, send photo with caption
+	if imageBase64 != "" {
+		// Clean base64 string (remove whitespace and newlines)
+		cleanBase64 := strings.ReplaceAll(imageBase64, " ", "")
+		cleanBase64 = strings.ReplaceAll(cleanBase64, "\n", "")
+		cleanBase64 = strings.ReplaceAll(cleanBase64, "\r", "")
+		cleanBase64 = strings.ReplaceAll(cleanBase64, "\t", "")
+
+		// Decode base64 image
+		imageData, err := base64.StdEncoding.DecodeString(cleanBase64)
+		if err != nil {
+			ts.logger.Error("Failed to decode base64 image",
+				zap.Error(err),
+				zap.Int("base64_length", len(imageBase64)),
+				zap.String("uid", uid))
+
+			// Send text-only message if image decode fails
+			msg := tgbotapi.NewMessage(ts.chatID, message+"\n\n❌ Failed to decode image")
+			msg.ParseMode = "HTML"
+			ts.bot.Send(msg)
+
+			return fmt.Errorf("error decoding image: %v", err)
+		}
+
+		ts.logger.Info("Decoded image successfully",
+			zap.Int("image_size_bytes", len(imageData)),
+			zap.String("uid", uid))
+
+		// Check image size (Telegram limit is 10MB)
+		const maxSize = 10 * 1024 * 1024 // 10MB
+		if len(imageData) > maxSize {
+			ts.logger.Warn("Image size exceeds Telegram limit",
+				zap.Int("size_bytes", len(imageData)),
+				zap.Int("max_bytes", maxSize),
+				zap.String("uid", uid))
+
+			// Send text-only message if image is too large
+			msg := tgbotapi.NewMessage(ts.chatID, message+"\n\n❌ Image too large to send")
+			msg.ParseMode = "HTML"
+			ts.bot.Send(msg)
+
+			return fmt.Errorf("image size %d bytes exceeds Telegram limit of %d bytes", len(imageData), maxSize)
+		}
+
+		// Create photo message with caption
+		photoBytes := tgbotapi.FileBytes{
+			Name:  fmt.Sprintf("unknown_person_%s.jpg", uid),
+			Bytes: imageData,
+		}
+
+		photoMsg := tgbotapi.NewPhoto(ts.chatID, photoBytes)
+		photoMsg.Caption = message
+		photoMsg.ParseMode = "HTML"
+
+		_, err = ts.bot.Send(photoMsg)
+		if err != nil {
+			ts.logger.Error("Failed to send photo",
+				zap.Error(err),
+				zap.Int("image_size", len(imageData)),
+				zap.String("uid", uid))
+
+			// Fallback: send text-only message
+			msg := tgbotapi.NewMessage(ts.chatID, message+"\n\n❌ Failed to send photo")
+			msg.ParseMode = "HTML"
+			ts.bot.Send(msg)
+
+			return fmt.Errorf("error sending photo: %v", err)
+		}
+
+		ts.logger.Info("Unknown person alert with photo sent successfully",
+			zap.String("uid", uid),
+			zap.String("timestamp", timestamp),
+			zap.Int("image_size", len(imageData)))
+	} else {
+		// Send text-only message if no photo
+		msg := tgbotapi.NewMessage(ts.chatID, message)
+		msg.ParseMode = "HTML"
+		msg.DisableWebPagePreview = true
+
+		_, err := ts.bot.Send(msg)
+		if err != nil {
+			ts.logger.Error("Failed to send text message", zap.Error(err))
+			return fmt.Errorf("error sending text message: %v", err)
+		}
+
+		ts.logger.Info("Unknown person alert (text only) sent",
+			zap.String("uid", uid),
+			zap.String("timestamp", timestamp))
+	}
+
+	return nil
 }

@@ -75,6 +75,9 @@ func main() {
 	// Initialize batch writer service
 	batchWriterService := services.NewBatchWriterService(cfg, firebaseService, logger)
 
+	// Initialize face recognition service
+	faceRecognitionService := services.NewFaceRecognitionService(telegramService, logger)
+
 	// Send startup notification
 	if err := telegramService.SendStartupMessage(); err != nil {
 		logger.Warn("Failed to send startup message", zap.Error(err))
@@ -130,6 +133,7 @@ func main() {
 	// Buffer size should be large enough to handle burst traffic
 	businessLogicChan := make(chan *models.SensorData, 200)
 	batchWriterChan := make(chan *models.SensorData, 200)
+	faceRecognitionChan := make(chan *models.FaceRecognitionData, 100)
 
 	// Start Process 1: Business Logic Processing (Anomaly Detection + Alerts)
 	go func() {
@@ -196,17 +200,20 @@ func main() {
 	// Start Process 2: Batch Writer for Firebase
 	go batchWriterService.Start(ctx, batchWriterChan)
 
-	// Start RabbitMQ consumer and distribute messages to both processes
-	go func() {
-		logger.Info("Starting RabbitMQ consumer and message distributor")
+	// Start Process 3: Face Recognition Processor
+	go faceRecognitionService.Start(ctx, faceRecognitionChan)
 
-		// Create a single channel for RabbitMQ messages
+	// Start RabbitMQ consumers
+	go func() {
+		logger.Info("Starting RabbitMQ sensor data consumer and message distributor")
+
+		// Create a single channel for RabbitMQ sensor messages
 		rabbitMQChan := make(chan *models.SensorData, 100)
 
-		// Start RabbitMQ consumer
+		// Start RabbitMQ sensor data consumer
 		go func() {
-			if err := rabbitMQService.Consume(ctx, rabbitMQChan); err != nil {
-				logger.Error("RabbitMQ consumer error", zap.Error(err))
+			if err := rabbitMQService.ConsumeSensorData(ctx, rabbitMQChan); err != nil {
+				logger.Error("RabbitMQ sensor consumer error", zap.Error(err))
 			}
 		}()
 
@@ -246,6 +253,15 @@ func main() {
 		}
 	}()
 
+	// Start Face Recognition Consumer
+	go func() {
+		logger.Info("Starting RabbitMQ face recognition consumer")
+
+		if err := rabbitMQService.ConsumeFaceRecognitionData(ctx, faceRecognitionChan); err != nil {
+			logger.Error("RabbitMQ face recognition consumer error", zap.Error(err))
+		}
+	}()
+
 	logger.Info("All services started, waiting for messages from RabbitMQ")
 
 	// Wait for shutdown signal
@@ -262,7 +278,7 @@ func main() {
 		logger.Warn("Batch writer shutdown timeout")
 	}
 
-	// Close RabbitMQ service
+	// Close RabbitMQ service (will close all consumers)
 	if err := rabbitMQService.Close(); err != nil {
 		logger.Error("Error closing RabbitMQ service", zap.Error(err))
 	} else {

@@ -150,6 +150,38 @@ func (r *RabbitMQService) connect() error {
 		zap.String("exchange", "amq.topic"),
 		zap.String("routing_key", r.config.RabbitMQQueue))
 
+	// Declare face recognition queue
+	faceQueue, err := r.channel.QueueDeclare(
+		"face_recognition_queue", // name
+		true,                     // durable
+		false,                    // delete when unused
+		false,                    // exclusive
+		false,                    // no-wait
+		nil,                      // arguments
+	)
+	if err != nil {
+		return fmt.Errorf("failed to declare face recognition queue: %w", err)
+	}
+
+	r.logger.Info("Face recognition queue declared", zap.String("queue", faceQueue.Name))
+
+	// Bind face recognition queue to sensors exchange
+	err = r.channel.QueueBind(
+		faceQueue.Name,            // queue name
+		"face_recognition_queue",  // routing key
+		r.config.RabbitMQExchange, // exchange
+		false,                     // no-wait
+		nil,                       // arguments
+	)
+	if err != nil {
+		return fmt.Errorf("failed to bind face recognition queue: %w", err)
+	}
+
+	r.logger.Info("Face recognition queue bound to exchange",
+		zap.String("queue", faceQueue.Name),
+		zap.String("exchange", r.config.RabbitMQExchange),
+		zap.String("routing_key", "face_recognition_queue"))
+
 	// Setup connection close notification
 	go r.handleReconnect()
 
@@ -183,8 +215,8 @@ func (r *RabbitMQService) handleReconnect() {
 	}
 }
 
-// Consume starts consuming messages from RabbitMQ queue
-func (r *RabbitMQService) Consume(ctx context.Context, sensorDataChan chan<- *models.SensorData) error {
+// ConsumeSensorData starts consuming sensor data messages from RabbitMQ queue
+func (r *RabbitMQService) ConsumeSensorData(ctx context.Context, sensorDataChan chan<- *models.SensorData) error {
 	for {
 		msgs, err := r.channel.Consume(
 			r.config.RabbitMQQueue, // queue
@@ -323,4 +355,92 @@ func (r *RabbitMQService) Publish(sensorData *models.SensorData) error {
 		zap.String("device_id", sensorData.DeviceID))
 
 	return nil
+}
+
+// ConsumeFaceRecognitionData starts consuming face recognition messages from RabbitMQ
+func (r *RabbitMQService) ConsumeFaceRecognitionData(ctx context.Context, faceDataChan chan<- *models.FaceRecognitionData) error {
+	queueName := "face_recognition_queue"
+
+	for {
+		msgs, err := r.channel.Consume(
+			queueName,                   // queue
+			"face-recognition-consumer", // consumer tag
+			false,                       // auto-ack
+			false,                       // exclusive
+			false,                       // no-local
+			false,                       // no-wait
+			nil,                         // args
+		)
+		if err != nil {
+			return fmt.Errorf("failed to register face recognition consumer: %w", err)
+		}
+
+		r.logger.Info("Started consuming face recognition messages",
+			zap.String("queue", queueName))
+
+	faceConsumeLoop:
+		for {
+			select {
+			case <-ctx.Done():
+				r.logger.Info("Stopping face recognition consumer")
+				return nil
+
+			case <-r.reconnect:
+				r.logger.Info("Face recognition reconnection detected, restarting consumer")
+				break faceConsumeLoop
+
+			case msg, ok := <-msgs:
+				if !ok {
+					r.logger.Warn("Face recognition message channel closed")
+					time.Sleep(1 * time.Second)
+					break faceConsumeLoop
+				}
+
+				// Process message
+				if err := r.processFaceRecognitionMessage(msg, faceDataChan); err != nil {
+					r.logger.Error("Failed to process face recognition message",
+						zap.Error(err),
+						zap.String("message_id", msg.MessageId))
+
+					// Negative acknowledgment - requeue the message
+					msg.Nack(false, true)
+				} else {
+					// Acknowledge message
+					msg.Ack(false)
+				}
+			}
+		}
+	}
+}
+
+// processFaceRecognitionMessage parses and forwards face recognition data to the channel
+func (r *RabbitMQService) processFaceRecognitionMessage(msg amqp.Delivery, faceDataChan chan<- *models.FaceRecognitionData) error {
+	// Parse JSON message
+	var faceData models.FaceRecognitionData
+	if err := json.Unmarshal(msg.Body, &faceData); err != nil {
+		return fmt.Errorf("failed to unmarshal face recognition message: %w", err)
+	}
+
+	// Validate data
+	if faceData.UID == "" {
+		return fmt.Errorf("invalid face recognition data: missing uid")
+	}
+
+	// Set timestamp if not provided
+	if faceData.Timestamp.IsZero() {
+		faceData.Timestamp = time.Now()
+	}
+
+	r.logger.Debug("Received face recognition data from RabbitMQ",
+		zap.String("uid", faceData.UID),
+		zap.Time("timestamp", faceData.Timestamp),
+		zap.Bool("has_image", faceData.Base64 != ""))
+
+	// Send to processing channel (non-blocking with timeout)
+	select {
+	case faceDataChan <- &faceData:
+		return nil
+	case <-time.After(5 * time.Second):
+		return fmt.Errorf("timeout sending to face recognition processing channel")
+	}
 }

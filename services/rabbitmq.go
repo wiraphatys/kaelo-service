@@ -182,6 +182,38 @@ func (r *RabbitMQService) connect() error {
 		zap.String("exchange", r.config.RabbitMQExchange),
 		zap.String("routing_key", "face_recognition_queue"))
 
+	// Declare health check queue
+	healthCheckQueue, err := r.channel.QueueDeclare(
+		r.config.HealthCheckQueue, // name
+		true,                      // durable
+		false,                     // delete when unused
+		false,                     // exclusive
+		false,                     // no-wait
+		nil,                       // arguments
+	)
+	if err != nil {
+		return fmt.Errorf("failed to declare health check queue: %w", err)
+	}
+
+	r.logger.Info("Health check queue declared", zap.String("queue", healthCheckQueue.Name))
+
+	// Bind health check queue to sensors exchange
+	err = r.channel.QueueBind(
+		healthCheckQueue.Name,     // queue name
+		r.config.HealthCheckQueue, // routing key
+		r.config.RabbitMQExchange, // exchange
+		false,                     // no-wait
+		nil,                       // arguments
+	)
+	if err != nil {
+		return fmt.Errorf("failed to bind health check queue: %w", err)
+	}
+
+	r.logger.Info("Health check queue bound to exchange",
+		zap.String("queue", healthCheckQueue.Name),
+		zap.String("exchange", r.config.RabbitMQExchange),
+		zap.String("routing_key", r.config.HealthCheckQueue))
+
 	// Setup connection close notification
 	go r.handleReconnect()
 
@@ -442,5 +474,95 @@ func (r *RabbitMQService) processFaceRecognitionMessage(msg amqp.Delivery, faceD
 		return nil
 	case <-time.After(5 * time.Second):
 		return fmt.Errorf("timeout sending to face recognition processing channel")
+	}
+}
+
+// ConsumeHealthCheck starts consuming health check messages from RabbitMQ
+func (r *RabbitMQService) ConsumeHealthCheck(ctx context.Context, healthCheckChan chan<- *models.HealthCheckData) error {
+	queueName := r.config.HealthCheckQueue
+
+	for {
+		msgs, err := r.channel.Consume(
+			queueName,               // queue
+			"health-check-consumer", // consumer tag
+			false,                   // auto-ack
+			false,                   // exclusive
+			false,                   // no-local
+			false,                   // no-wait
+			nil,                     // args
+		)
+		if err != nil {
+			return fmt.Errorf("failed to register health check consumer: %w", err)
+		}
+
+		r.logger.Info("Started consuming health check messages",
+			zap.String("queue", queueName))
+
+	healthCheckConsumeLoop:
+		for {
+			select {
+			case <-ctx.Done():
+				r.logger.Info("Stopping health check consumer")
+				return nil
+
+			case <-r.reconnect:
+				r.logger.Info("Health check reconnection detected, restarting consumer")
+				break healthCheckConsumeLoop
+
+			case msg, ok := <-msgs:
+				if !ok {
+					r.logger.Warn("Health check message channel closed")
+					time.Sleep(1 * time.Second)
+					break healthCheckConsumeLoop
+				}
+
+				// Process message
+				if err := r.processHealthCheckMessage(msg, healthCheckChan); err != nil {
+					r.logger.Error("Failed to process health check message",
+						zap.Error(err),
+						zap.String("message_id", msg.MessageId))
+
+					// Negative acknowledgment - requeue the message
+					msg.Nack(false, true)
+				} else {
+					// Acknowledge message
+					msg.Ack(false)
+				}
+			}
+		}
+	}
+}
+
+// processHealthCheckMessage parses and forwards health check data to the channel
+func (r *RabbitMQService) processHealthCheckMessage(msg amqp.Delivery, healthCheckChan chan<- *models.HealthCheckData) error {
+	// Parse JSON message
+	var healthCheck models.HealthCheckData
+	if err := json.Unmarshal(msg.Body, &healthCheck); err != nil {
+		return fmt.Errorf("failed to unmarshal health check message: %w", err)
+	}
+
+	// Validate data
+	if healthCheck.DeviceID == "" {
+		return fmt.Errorf("invalid health check data: missing device_id")
+	}
+
+	// Set timestamp if not provided
+	if healthCheck.Timestamp.IsZero() {
+		healthCheck.Timestamp = time.Now()
+	}
+
+	r.logger.Debug("Received health check data from RabbitMQ",
+		zap.String("device_id", healthCheck.DeviceID),
+		zap.Time("timestamp", healthCheck.Timestamp),
+		zap.Bool("wifi_connected", healthCheck.WiFiConnected),
+		zap.Bool("mqtt_connected", healthCheck.MQTTConnected),
+		zap.Int64("uptime_ms", healthCheck.UptimeMs))
+
+	// Send to processing channel (non-blocking with timeout)
+	select {
+	case healthCheckChan <- &healthCheck:
+		return nil
+	case <-time.After(5 * time.Second):
+		return fmt.Errorf("timeout sending to health check processing channel")
 	}
 }

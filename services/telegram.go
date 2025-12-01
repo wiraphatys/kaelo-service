@@ -361,3 +361,122 @@ func (ts *TelegramService) SendUnknownPersonAlert(uid string, imageBase64 string
 
 	return nil
 }
+
+// SendHealthCheckTimeoutAlert sends an alert when a device fails to send health check within timeout
+func (ts *TelegramService) SendHealthCheckTimeoutAlert(deviceID string, lastSeen time.Time, timeSinceLastSeen time.Duration, lastHealthCheck *models.HealthCheckData) error {
+	var sb strings.Builder
+
+	// Header
+	sb.WriteString("⚠️ <b>DEVICE HEALTH CHECK TIMEOUT</b> ⚠️\n\n")
+
+	// Device info
+	sb.WriteString(fmt.Sprintf("📱 <b>Device:</b> %s\n", deviceID))
+	sb.WriteString(fmt.Sprintf("🕐 <b>Last Seen:</b> %s\n", lastSeen.Format("2006-01-02 15:04:05")))
+	sb.WriteString(fmt.Sprintf("⏱️ <b>Time Since Last Check:</b> %s\n\n", formatDuration(timeSinceLastSeen)))
+
+	// Last known status (if available)
+	if lastHealthCheck != nil {
+		sb.WriteString("📊 <b>Last Known Status:</b>\n")
+		sb.WriteString(fmt.Sprintf("📡 WiFi: %s\n", formatConnectionStatus(lastHealthCheck.WiFiConnected)))
+		sb.WriteString(fmt.Sprintf("🔌 MQTT: %s\n", formatConnectionStatus(lastHealthCheck.MQTTConnected)))
+		sb.WriteString(fmt.Sprintf("⏰ Uptime: %s\n\n", formatUptime(lastHealthCheck.UptimeMs)))
+
+		// Sensor status
+		sb.WriteString("🔧 <b>Sensors:</b>\n")
+		sb.WriteString(fmt.Sprintf("  • DHT11: %s\n", formatSensorStatus(lastHealthCheck.Sensors.DHT11)))
+		sb.WriteString(fmt.Sprintf("  • MPU6050: %s\n", formatSensorStatus(lastHealthCheck.Sensors.MPU6050)))
+		sb.WriteString(fmt.Sprintf("  • Flame: %s\n", formatSensorStatus(lastHealthCheck.Sensors.Flame)))
+		sb.WriteString(fmt.Sprintf("  • Gas: %s\n\n", formatSensorStatus(lastHealthCheck.Sensors.Gas)))
+	}
+
+	// Action required
+	sb.WriteString("💡 <b>Action Required:</b>\n")
+	sb.WriteString("Device may be offline or experiencing connectivity issues. Please check the device status.\n\n")
+
+	// Status indicator
+	sb.WriteString("🔴 <b>Status:</b> DEVICE TIMEOUT")
+
+	msg := tgbotapi.NewMessage(ts.chatID, sb.String())
+	msg.ParseMode = "HTML"
+	msg.DisableWebPagePreview = true
+
+	_, err := ts.bot.Send(msg)
+	if err != nil {
+		return fmt.Errorf("error sending health check timeout alert: %v", err)
+	}
+
+	ts.logger.Info("Sent health check timeout alert",
+		zap.String("device_id", deviceID),
+		zap.Duration("time_since_last_seen", timeSinceLastSeen))
+
+	return nil
+}
+
+// SendHealthCheckRecoveryAlert sends an alert when a device recovers from timeout
+func (ts *TelegramService) SendHealthCheckRecoveryAlert(deviceID string, downDuration time.Duration) error {
+	var sb strings.Builder
+
+	// Header
+	sb.WriteString("✅ <b>DEVICE RECOVERED</b> ✅\n\n")
+
+	// Device info
+	sb.WriteString(fmt.Sprintf("📱 <b>Device:</b> %s\n", deviceID))
+	sb.WriteString(fmt.Sprintf("🕐 <b>Recovery Time:</b> %s\n", time.Now().Format("2006-01-02 15:04:05")))
+	sb.WriteString(fmt.Sprintf("⏱️ <b>Downtime:</b> %s\n\n", formatDuration(downDuration)))
+
+	// Status indicator
+	sb.WriteString("🟢 <b>Status:</b> DEVICE ONLINE")
+
+	msg := tgbotapi.NewMessage(ts.chatID, sb.String())
+	msg.ParseMode = "HTML"
+	msg.DisableWebPagePreview = true
+
+	_, err := ts.bot.Send(msg)
+	if err != nil {
+		return fmt.Errorf("error sending health check recovery alert: %v", err)
+	}
+
+	ts.logger.Info("Sent health check recovery alert",
+		zap.String("device_id", deviceID),
+		zap.Duration("down_duration", downDuration))
+
+	return nil
+}
+
+// Helper functions for formatting
+
+func formatConnectionStatus(connected bool) string {
+	if connected {
+		return "✅ Connected"
+	}
+	return "❌ Disconnected"
+}
+
+func formatSensorStatus(working bool) string {
+	if working {
+		return "✅ OK"
+	}
+	return "❌ Failed"
+}
+
+func formatUptime(uptimeMs int64) string {
+	duration := time.Duration(uptimeMs) * time.Millisecond
+	return formatDuration(duration)
+}
+
+func formatDuration(d time.Duration) string {
+	if d < time.Minute {
+		return fmt.Sprintf("%.0f seconds", d.Seconds())
+	} else if d < time.Hour {
+		minutes := int(d.Minutes())
+		seconds := int(d.Seconds()) % 60
+		return fmt.Sprintf("%d min %d sec", minutes, seconds)
+	} else if d < 24*time.Hour {
+		hours := int(d.Hours())
+		minutes := int(d.Minutes()) % 60
+		return fmt.Sprintf("%d hr %d min", hours, minutes)
+	}
+	days := int(d.Hours()) / 24
+	hours := int(d.Hours()) % 24
+	return fmt.Sprintf("%d days %d hr", days, hours)
+}

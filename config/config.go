@@ -36,6 +36,10 @@ type Config struct {
 	LightMin       float64
 	LightMax       float64
 	GasMax         float64
+
+	// Health Check Configuration
+	HealthCheckQueue   string
+	HealthCheckTimeout int // in seconds
 }
 
 func LoadConfig() (*Config, error) {
@@ -44,7 +48,7 @@ func LoadConfig() (*Config, error) {
 
 	config := &Config{
 		// RabbitMQ Configuration
-		RabbitMQURL:      getEnv("RABBITMQ_URL", "amqp://kaelo:kaelo2024@localhost:5672/"),
+		RabbitMQURL:      getEnv("RABBITMQ_URL", "amqp://kaelo:kaelo2024@172.20.10.12:5672/"),
 		RabbitMQQueue:    getEnv("RABBITMQ_QUEUE", "sensor_data_queue"),
 		RabbitMQExchange: getEnv("RABBITMQ_EXCHANGE", "sensors"),
 
@@ -71,6 +75,10 @@ func LoadConfig() (*Config, error) {
 		LightMin:       getEnvFloat("LIGHT_MIN", 100.0),
 		LightMax:       getEnvFloat("LIGHT_MAX", 800.0),
 		GasMax:         getEnvFloat("GAS_MAX", 400.0),
+
+		// Health Check Configuration
+		HealthCheckQueue:   getEnv("HEALTH_CHECK_QUEUE", "health_check_queue"),
+		HealthCheckTimeout: getEnvInt("HEALTH_CHECK_TIMEOUT", 60),
 	}
 
 	return config, nil

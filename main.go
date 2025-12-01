@@ -78,6 +78,9 @@ func main() {
 	// Initialize face recognition service
 	faceRecognitionService := services.NewFaceRecognitionService(telegramService, logger)
 
+	// Initialize health check monitoring service
+	healthCheckService := services.NewHealthCheckService(cfg, telegramService, logger)
+
 	// Send startup notification
 	if err := telegramService.SendStartupMessage(); err != nil {
 		logger.Warn("Failed to send startup message", zap.Error(err))
@@ -134,6 +137,7 @@ func main() {
 	businessLogicChan := make(chan *models.SensorData, 200)
 	batchWriterChan := make(chan *models.SensorData, 200)
 	faceRecognitionChan := make(chan *models.FaceRecognitionData, 100)
+	healthCheckChan := make(chan *models.HealthCheckData, 100)
 
 	// Start Process 1: Business Logic Processing (Anomaly Detection + Alerts)
 	go func() {
@@ -203,6 +207,9 @@ func main() {
 	// Start Process 3: Face Recognition Processor
 	go faceRecognitionService.Start(ctx, faceRecognitionChan)
 
+	// Start Process 4: Health Check Monitoring
+	go healthCheckService.Start(ctx, healthCheckChan)
+
 	// Start RabbitMQ consumers
 	go func() {
 		logger.Info("Starting RabbitMQ sensor data consumer and message distributor")
@@ -259,6 +266,15 @@ func main() {
 
 		if err := rabbitMQService.ConsumeFaceRecognitionData(ctx, faceRecognitionChan); err != nil {
 			logger.Error("RabbitMQ face recognition consumer error", zap.Error(err))
+		}
+	}()
+
+	// Start Health Check Consumer
+	go func() {
+		logger.Info("Starting RabbitMQ health check consumer")
+
+		if err := rabbitMQService.ConsumeHealthCheck(ctx, healthCheckChan); err != nil {
+			logger.Error("RabbitMQ health check consumer error", zap.Error(err))
 		}
 	}()
 
